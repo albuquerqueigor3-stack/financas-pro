@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { Bell, Plus, Trash2, TrendingUp, CreditCard, Home, BarChart2, Wallet, X, AlertCircle, CheckCircle, LogOut, User, Lock, Eye, EyeOff, ChevronLeft, ChevronRight } from "lucide-react";
+import { db } from "./firebase";
+import { doc, setDoc, getDoc } from "firebase/firestore";
 
 const COLORS = ["#6366f1","#22d3ee","#f59e0b","#10b981","#f43f5e","#a78bfa","#34d399","#fb923c","#e879f9"];
 const CATS = ["Moradia","Alimentação","Transporte","Saúde","Educação","Lazer","Vestuário","Serviços","Outros"];
@@ -24,6 +26,17 @@ const pill = (bg,c) => ({background:bg,color:c,fontSize:"10px",padding:"2px 8px"
 const btn  = (bg,c) => ({background:bg,border:"none",borderRadius:"8px",padding:"8px 14px",color:c,cursor:"pointer",fontWeight:"600",fontSize:"13px",display:"flex",alignItems:"center",gap:"5px"});
 const iBtn = (bg,c) => ({background:bg,border:"none",borderRadius:"6px",padding:"5px 7px",color:c,cursor:"pointer",display:"flex",alignItems:"center"});
 
+// Firebase helpers
+const fbGet = async (path) => {
+  try {
+    const snap = await getDoc(doc(db, ...path.split("/")));
+    return snap.exists() ? snap.data() : null;
+  } catch(e) { return null; }
+};
+const fbSet = async (path, data) => {
+  try { await setDoc(doc(db, ...path.split("/")), data, {merge:true}); } catch(e) {}
+};
+
 function MonthBar({year, month, onPrev, onNext}) {
   return (
     <div style={{background:"#1e293b",borderRadius:"12px",padding:"10px 14px",marginBottom:"14px",border:"1px solid #334155",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -46,22 +59,25 @@ function AuthScreen({onLogin}) {
   const [err,setErr]       = useState("");
   const [busy,setBusy]     = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     setErr(""); setBusy(true);
     const u = user.trim().toLowerCase();
     if (!u || !pass) { setErr("Preencha usuário e senha."); setBusy(false); return; }
     if (u.length < 3) { setErr("Usuário: mínimo 3 caracteres."); setBusy(false); return; }
     if (pass.length < 4) { setErr("Senha: mínimo 4 caracteres."); setBusy(false); return; }
-    const key = "fpa_"+u;
+
     if (mode === "register") {
       if (pass !== pass2) { setErr("Senhas não coincidem."); setBusy(false); return; }
-      if (localStorage.getItem(key)) { setErr("Usuário já existe. Faça login."); setBusy(false); return; }
-      localStorage.setItem(key, hashPw(pass));
+      const existing = await fbGet("users/"+u);
+      if (existing) { setErr("Usuário já existe. Faça login."); setBusy(false); return; }
+      await fbSet("users/"+u, { username: u, password: hashPw(pass), createdAt: new Date().toISOString() });
+      localStorage.setItem("fp_sess", u);
       onLogin(u);
     } else {
-      const stored = localStorage.getItem(key);
-      if (!stored) { setErr("Usuário não encontrado."); setBusy(false); return; }
-      if (stored !== hashPw(pass)) { setErr("Senha incorreta."); setBusy(false); return; }
+      const userData = await fbGet("users/"+u);
+      if (!userData) { setErr("Usuário não encontrado."); setBusy(false); return; }
+      if (userData.password !== hashPw(pass)) { setErr("Senha incorreta."); setBusy(false); return; }
+      localStorage.setItem("fp_sess", u);
       onLogin(u);
     }
     setBusy(false);
@@ -158,23 +174,32 @@ function Dashboard({user,onLogout}){
   const [ne,setNe] = useState({name:"",value:"",category:"Alimentação",date:now.toISOString().slice(0,10)});
 
   const mKey = toKey(selYear,selMonth);
-  const U    = "fp_"+user+"_";
 
   useEffect(()=>{
-    const s = localStorage.getItem(U+"bills");
-    if (s) setBills(JSON.parse(s)||[]);
+    (async()=>{
+      const data = await fbGet("users/"+user+"/data/bills");
+      if (data?.list) setBills(data.list);
+    })();
   },[user]);
 
   useEffect(()=>{
     setLoaded(false);
-    setIncome(localStorage.getItem(U+mKey+"_inc")||"");
-    setExps(JSON.parse(localStorage.getItem(U+mKey+"_exps")||"[]"));
-    setCc(JSON.parse(localStorage.getItem(U+mKey+"_cc")||'{"total":""}'));
-    setPaidIds(JSON.parse(localStorage.getItem(U+mKey+"_paid")||"[]"));
-    setLoaded(true);
+    (async()=>{
+      const mData = await fbGet("users/"+user+"/months/"+mKey);
+      setIncome(mData?.income||"");
+      setExps(mData?.exps||[]);
+      setCc(mData?.cc||{total:""});
+      setPaidIds(mData?.paidIds||[]);
+      setLoaded(true);
+    })();
   },[user,mKey]);
 
-  const sv = (k,v) => localStorage.setItem(U+k, typeof v==="string"?v:JSON.stringify(v));
+  const svMonth = async (patch) => {
+    await fbSet("users/"+user+"/months/"+mKey, patch);
+  };
+  const svBills = async (list) => {
+    await fbSet("users/"+user+"/data/bills", {list});
+  };
 
   const today = new Date().getDate();
   const isNow = selYear===now.getFullYear()&&selMonth===now.getMonth();
@@ -197,23 +222,26 @@ function Dashboard({user,onLogout}){
   const prevMonth=()=>{if(selMonth===0){setSelYear(y=>y-1);setSelMonth(11);}else setSelMonth(m=>m-1);};
   const nextMonth=()=>{if(selMonth===11){setSelYear(y=>y+1);setSelMonth(0);}else setSelMonth(m=>m+1);};
 
-  const addBill=()=>{
+  const addBill=async()=>{
     if(!nb.name||!nb.value)return;
     const u=[...bills,{...nb,id:Date.now(),value:parseFloat(nb.value)}];
-    setBills(u);sv("bills",u);
-    setNb({name:"",value:"",dueDay:"",category:"Moradia"});setShowBF(false);
+    setBills(u); await svBills(u);
+    setNb({name:"",value:"",dueDay:"",category:"Moradia"}); setShowBF(false);
   };
-  const addExp=()=>{
+  const addExp=async()=>{
     if(!ne.name||!ne.value)return;
     const u=[...exps,{...ne,id:Date.now(),value:parseFloat(ne.value)}];
-    setExps(u);sv(mKey+"_exps",u);
-    setNe({name:"",value:"",category:"Alimentação",date:now.toISOString().slice(0,10)});setShowEF(false);
+    setExps(u); await svMonth({exps:u});
+    setNe({name:"",value:"",category:"Alimentação",date:now.toISOString().slice(0,10)}); setShowEF(false);
   };
-  const togglePaid=id=>{const u=paidIds.includes(id)?paidIds.filter(x=>x!==id):[...paidIds,id];setPaidIds(u);sv(mKey+"_paid",u);};
-  const delBill=id=>{const u=bills.filter(b=>b.id!==id);setBills(u);sv("bills",u);};
-  const delExp=id=>{const u=exps.filter(e=>e.id!==id);setExps(u);sv(mKey+"_exps",u);};
-  const saveInc=()=>{setIncome(incInput);sv(mKey+"_inc",incInput);setEditInc(false);};
-  const saveCC=(field,val)=>{const u={...cc,[field]:val};setCc(u);sv(mKey+"_cc",u);};
+  const togglePaid=async id=>{
+    const u=paidIds.includes(id)?paidIds.filter(x=>x!==id):[...paidIds,id];
+    setPaidIds(u); await svMonth({paidIds:u});
+  };
+  const delBill=async id=>{const u=bills.filter(b=>b.id!==id);setBills(u);await svBills(u);};
+  const delExp=async id=>{const u=exps.filter(e=>e.id!==id);setExps(u);await svMonth({exps:u});};
+  const saveInc=async()=>{setIncome(incInput);await svMonth({income:incInput});setEditInc(false);};
+  const saveCC=async(field,val)=>{const u={...cc,[field]:val};setCc(u);await svMonth({cc:u});};
 
   const NAVS=[
     {id:"dash",icon:<Home size={18}/>,label:"Início"},
