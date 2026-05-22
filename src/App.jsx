@@ -4,6 +4,8 @@ import { Bell, Plus, Trash2, TrendingUp, CreditCard, Home, BarChart2, Wallet, X,
 import { auth, db } from "./firebase";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 import { doc, setDoc, getDoc } from "firebase/firestore";
+import InvestTab from "./InvestTab";
+
 
 const COLORS = ["#6366f1","#22d3ee","#f59e0b","#10b981","#f43f5e","#a78bfa","#34d399","#fb923c","#e879f9"];
 const CATS = ["Moradia","Alimentação","Transporte","Saúde","Educação","Lazer","Vestuário","Serviços","Outros"];
@@ -352,13 +354,7 @@ function Dashboard({user,onLogout}){
           </div>}
         </div>}
 
-        {tab==="inv"&&<div>
-          <div style={{fontWeight:"700",fontSize:"16px",marginBottom:"4px"}}>Onde Investir</div>
-          <div style={{fontSize:"12px",color:"#64748b",marginBottom:"14px"}}>Acima de 100% do CDI com segurança</div>
-          {balance>0&&<div style={{...cardStyle,background:"#052e16",border:"1px solid #16a34a"}}><div style={{fontSize:"13px",color:"#4ade80",fontWeight:"700"}}>💰 Você tem {fmt(balance)} disponível!</div><div style={{fontSize:"11px",color:"#86efac",marginTop:"4px"}}>Faça esse saldo render mais.</div></div>}
-          {INVESTMENTS.map((inv,i)=>(<div key={i} style={{...cardStyle,border:"1px solid "+(inv.star?"#16a34a":"#334155")}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"10px"}}><div><div style={{display:"flex",gap:"6px",alignItems:"center",marginBottom:"2px"}}><span style={{fontWeight:"700",fontSize:"13px"}}>{inv.name}</span>{inv.star&&<span style={{background:"#052e16",color:"#4ade80",fontSize:"10px",padding:"2px 7px",borderRadius:"99px",fontWeight:"700"}}>⭐ TOP</span>}</div><div style={{fontSize:"11px",color:"#64748b"}}>{inv.type}</div></div><div style={{fontWeight:"900",color:"#10b981",fontSize:"15px"}}>{inv.rate}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"6px"}}>{[{l:"Risco",v:inv.risk},{l:"Mínimo",v:inv.min},{l:"Liquidez",v:inv.liq}].map(f=>(<div key={f.l} style={{background:"#0f172a",borderRadius:"8px",padding:"7px",textAlign:"center"}}><div style={{fontSize:"10px",color:"#64748b",marginBottom:"2px"}}>{f.l}</div><div style={{fontSize:"11px",fontWeight:"700",color:"#e2e8f0",lineHeight:"1.3"}}>{f.v}</div></div>))}</div></div>))}
-          <div style={{...cardStyle,border:"1px solid #6366f1"}}><div style={{fontWeight:"700",fontSize:"13px",marginBottom:"8px"}}>📌 Estratégia</div>{["1️⃣  3–6 meses de gastos em CDB liquidez diária","2️⃣  Excedente em CDB 120%+ CDI ou LCI/LCA","3️⃣  Nunca invista o que precisará antes do vencimento","4️⃣  FGC garante até R$ 250k por instituição"].map((t,i)=>(<div key={i} style={{fontSize:"12px",color:"#94a3b8",marginBottom:"8px",lineHeight:"1.6"}}>{t}</div>))}</div>
-        </div>}
+        {tab==="inv" && <InvestTab/>}
       </div>
 
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:"480px",background:"#1e293b",borderTop:"1px solid #334155",display:"flex",zIndex:20}}>
