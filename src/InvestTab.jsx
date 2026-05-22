@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 
 const BRAPI_TOKEN = "jQexPGvBYwSnoKzWGuu5Xt";
-const ACOES_TICKERS = ["PETR4","VALE3","ITUB4","BBAS3","WEGE3","RENT3","RADL3","EGIE3","TAEE11","VIVT3"];
-const FIIS_TICKERS  = ["MXRF11","HGLG11","XPML11","KNRI11","CPTS11","BTLG11","HSML11","IRDM11","VILG11","RBRF11"];
+const ACOES_TICKERS = ["PETR4","VALE3","ITUB4","BBAS3","WEGE3"];
+const FIIS_TICKERS  = ["MXRF11","HGLG11","XPML11","KNRI11","CPTS11"];
 const CRYPTO_IDS    = ["bitcoin","ethereum","solana","binancecoin","cardano"];
 
 const card = {background:"#1e293b",borderRadius:"14px",padding:"14px",marginBottom:"10px",border:"1px solid #334155"};
