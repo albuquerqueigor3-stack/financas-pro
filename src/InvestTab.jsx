@@ -1,8 +1,19 @@
 import { useState, useEffect } from "react";
 
-const BRAPI_TOKEN = "jQexPGvBYwSnoKzWGuu5Xt";
-const ACOES_TICKERS = ["PETR4","VALE3","ITUB4","BBAS3","WEGE3"];
-const FIIS_TICKERS  = ["MXRF11","HGLG11","XPML11","KNRI11","CPTS11"];
+const ACOES = [
+  {ticker:"PETR4",nome:"Petrobras PN",setor:"Energia"},
+  {ticker:"VALE3",nome:"Vale ON",setor:"Mineração"},
+  {ticker:"ITUB4",nome:"Itaú Unibanco PN",setor:"Financeiro"},
+  {ticker:"BBAS3",nome:"Banco do Brasil ON",setor:"Financeiro"},
+  {ticker:"WEGE3",nome:"WEG ON",setor:"Indústria"},
+];
+const FIIS = [
+  {ticker:"MXRF11",nome:"Maxi Renda",setor:"FII Papel"},
+  {ticker:"HGLG11",nome:"CSHG Logística",setor:"FII Logística"},
+  {ticker:"XPML11",nome:"XP Malls",setor:"FII Shopping"},
+  {ticker:"KNRI11",nome:"Kinea Renda Imobiliária",setor:"FII Híbrido"},
+  {ticker:"CPTS11",nome:"Capitânia Securities",setor:"FII Papel"},
+];
 const CRYPTO_IDS    = ["bitcoin","ethereum","solana","binancecoin","cardano"];
 
 const card = {background:"#1e293b",borderRadius:"14px",padding:"14px",marginBottom:"10px",border:"1px solid #334155"};
@@ -186,41 +197,59 @@ export default function InvestTab() {
         if(j.EURBRL?.bid){ eurVal=parseFloat(parseFloat(j.EURBRL.bid).toFixed(2)); eurChg=parseFloat(parseFloat(j.EURBRL.pctChange).toFixed(2)); }
       } catch(e){}
 
+      // Função para buscar cotação via Yahoo Finance
+      const fetchYahoo = async (ticker) => {
+        const symbol = ticker+".SA";
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
+        const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+        const r = await fetch(proxy);
+        const j = await r.json();
+        const data = JSON.parse(j.contents);
+        const meta = data?.chart?.result?.[0]?.meta;
+        if (!meta) return null;
+        const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close||[];
+        const validCloses = closes.filter(v=>v!=null);
+        const firstClose = validCloses[0]||meta.regularMarketPrice;
+        const lastClose  = meta.regularMarketPrice||validCloses[validCloses.length-1];
+        const change12m  = parseFloat(((lastClose-firstClose)/firstClose*100).toFixed(1));
+        return { preco: lastClose, change12m };
+      };
+
       // AÇÕES
       let acoesData=[];
       try {
-        const r = await fetch(`https://brapi.dev/api/quote/${ACOES_TICKERS.join(",")}?token=${BRAPI_TOKEN}&fundamental=true`);
-        const j = await r.json();
-        acoesData = (j.results||[]).filter(a=>a.regularMarketPrice>0).map(a=>{
-          const low52 = a.fiftyTwoWeekLow||a.regularMarketPrice*0.85;
-          const change12m = parseFloat(((a.regularMarketPrice-low52)/low52*100).toFixed(1));
-          const dy = parseFloat((a.dividendYield||0).toFixed(1));
-          const score = calcScore(change12m,dy);
-          const op = calcOp(a.regularMarketPrice,"acao");
-          return {rank:0,ticker:a.symbol,nome:a.longName||a.shortName||a.symbol,setor:a.sector||"B3",
-            preco:a.regularMarketPrice,change12m,dy,score,...op,
-            segurar:"6–12 meses",risco:Math.abs(change12m)>50?"Alto":"Médio",
-            analise:gerarAnalise(a.symbol,a.longName||a.shortName||a.symbol,change12m,dy,score,"acao")};
-        }).sort((a,b)=>b.score-a.score).slice(0,5).map((a,i)=>({...a,rank:i+1}));
+        const DY_MAP = {PETR4:14.2,VALE3:9.8,ITUB4:5.1,BBAS3:8.3,WEGE3:1.8};
+        const results = await Promise.allSettled(ACOES.map(a=>fetchYahoo(a.ticker)));
+        acoesData = ACOES.map((a,i)=>{
+          const res = results[i].status==="fulfilled"?results[i].value:null;
+          if (!res) return null;
+          const dy = DY_MAP[a.ticker]||0;
+          const score = calcScore(res.change12m, dy);
+          const op = calcOp(res.preco,"acao");
+          return {rank:0,ticker:a.ticker,nome:a.nome,setor:a.setor,
+            preco:parseFloat(res.preco.toFixed(2)),change12m:res.change12m,dy,score,...op,
+            segurar:"6–12 meses",risco:Math.abs(res.change12m)>50?"Alto":"Médio",
+            analise:gerarAnalise(a.ticker,a.nome,res.change12m,dy,score,"acao")};
+        }).filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,5).map((a,i)=>({...a,rank:i+1}));
       } catch(e){ console.error("Ações:",e); }
 
       // FIIs
       let fiisData=[];
       try {
-        const r = await fetch(`https://brapi.dev/api/quote/${FIIS_TICKERS.join(",")}?token=${BRAPI_TOKEN}&fundamental=true`);
-        const j = await r.json();
-        fiisData = (j.results||[]).filter(f=>f.regularMarketPrice>0).map(f=>{
-          const low52 = f.fiftyTwoWeekLow||f.regularMarketPrice*0.9;
-          const change12m = parseFloat(((f.regularMarketPrice-low52)/low52*100).toFixed(1));
-          const dy = parseFloat((f.dividendYield||0).toFixed(1));
+        const DY_FII = {MXRF11:11.4,HGLG11:9.2,XPML11:10.1,KNRI11:8.7,CPTS11:12.3};
+        const results = await Promise.allSettled(FIIS.map(f=>fetchYahoo(f.ticker)));
+        fiisData = FIIS.map((f,i)=>{
+          const res = results[i].status==="fulfilled"?results[i].value:null;
+          if (!res) return null;
+          const dy = DY_FII[f.ticker]||0;
           const dyMensal = parseFloat((dy/12).toFixed(2));
-          const score = calcScore(change12m,dy);
-          const op = calcOp(f.regularMarketPrice,"fii");
-          return {rank:0,ticker:f.symbol,nome:f.longName||f.shortName||f.symbol,setor:"FII",
-            preco:f.regularMarketPrice,change12m,dy,dyMensal,score,...op,
+          const score = calcScore(res.change12m, dy);
+          const op = calcOp(res.preco,"fii");
+          return {rank:0,ticker:f.ticker,nome:f.nome,setor:f.setor,
+            preco:parseFloat(res.preco.toFixed(2)),change12m:res.change12m,dy,dyMensal,score,...op,
             segurar:"Longo prazo",risco:"Baixo",
-            analise:gerarAnalise(f.symbol,f.longName||f.shortName||f.symbol,change12m,dy,score,"fii")};
-        }).sort((a,b)=>b.score-a.score).slice(0,5).map((a,i)=>({...a,rank:i+1}));
+            analise:gerarAnalise(f.ticker,f.nome,res.change12m,dy,score,"fii")};
+        }).filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,5).map((a,i)=>({...a,rank:i+1}));
       } catch(e){ console.error("FIIs:",e); }
 
       // CRIPTOS
