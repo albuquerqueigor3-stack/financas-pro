@@ -1,121 +1,127 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { initializeApp, getApps } from "firebase/app";
-import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
+const BRAPI_TOKEN = "jQexPGvBYwSnoKzWGuu5Xt";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyDmuPHMkI2i6ptVdgRAOKELPSviB88wt9E",
-  authDomain: "financas-pro-aff9b.firebaseapp.com",
-  projectId: "financas-pro-aff9b",
-  storageBucket: "financas-pro-aff9b.firebasestorage.app",
-  messagingSenderId: "359967610480",
-  appId: "1:359967610480:web:78e8c33baa99b37e4c06b5"
-};
+const ACOES_TICKERS = ["PETR4","VALE3","ITUB4","BBAS3","WEGE3","RENT3","RADL3","EGIE3","TAEE11","VIVT3"];
+const FIIS_TICKERS  = ["MXRF11","HGLG11","XPML11","KNRI11","CPTS11","BTLG11","HSML11","IRDM11","VILG11","RBRF11"];
+const CRYPTO_IDS    = ["bitcoin","ethereum","solana","binancecoin","cardano"];
 
-let app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const db = getFirestore(app);
-
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET");
-
-  const today = new Date().toISOString().slice(0, 10);
-
-  try {
-    const cached = await getDoc(doc(db, "cache", "investments_" + today));
-    if (cached.exists()) return res.status(200).json(cached.data());
-  } catch(e) {}
-
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const today_br = new Date().toLocaleDateString("pt-BR");
-
-  const prompt = `Hoje é ${today_br}. Pesquise na internet dados reais e atuais do mercado financeiro brasileiro e retorne os melhores ativos para investir agora.
-
-Retorne APENAS JSON válido sem markdown, sem texto extra, exatamente neste formato:
-{
-  "date": "${today}",
-  "hora": "HH:MM",
-  "cambio": {
-    "usd": {"valor": 5.82, "chg": 0.3},
-    "eur": {"valor": 6.31, "chg": -0.1}
-  },
-  "acoes": [
-    {
-      "rank": 1, "ticker": "PETR4", "nome": "Petrobras PN", "setor": "Energia",
-      "preco": 38.50, "change12m": 42.3, "dy": 14.2, "score": 9.2,
-      "entrada": "R$37,80–38,90", "alvo": "R$44,50", "alvoChg": 15,
-      "stop": "R$35,20", "stopChg": -7, "rr": "1:2,1",
-      "segurar": "Dez/2025", "risco": "Médio",
-      "analise": "Análise detalhada de 5-7 linhas: por que entrar agora, catalisadores de alta, situação técnica atual, dividend yield projetado, riscos principais e perspectiva de médio prazo."
-    }
-  ],
-  "fiis": [
-    {
-      "rank": 1, "ticker": "MXRF11", "nome": "Maxi Renda", "setor": "FII de Papel",
-      "preco": 10.42, "change12m": 12.1, "dy": 11.4, "dyMensal": 0.95, "score": 9.0,
-      "entrada": "R$10,20–10,50", "alvo": "R$11,80", "alvoChg": 13,
-      "stop": "R$9,70", "stopChg": -7, "rr": "1:1,9",
-      "segurar": "Longo prazo", "risco": "Baixo",
-      "analise": "Análise detalhada de 5-7 linhas: qualidade da carteira, vacância, distribuições mensais, perspectiva de taxa Selic, gestão e riscos."
-    }
-  ],
-  "criptos": [
-    {
-      "rank": 1, "ticker": "BTC", "nome": "Bitcoin", "setor": "Layer 1",
-      "preco": 97400, "precoBrl": 566000, "change12m": 125, "score": 9.5,
-      "entrada": "$94.000–97.000", "alvo": "$130.000", "alvoChg": 35,
-      "stop": "$82.000", "stopChg": -15, "rr": "1:2,3",
-      "segurar": "6–12 meses", "risco": "Alto",
-      "analise": "Análise detalhada de 5-7 linhas: ciclo atual, adoção institucional, dominância, suportes técnicos, catalisadores e riscos."
-    }
-  ]
+function calcScore(change12m, dy) {
+  let score = 5;
+  if (change12m > 50) score += 2;
+  else if (change12m > 20) score += 1.5;
+  else if (change12m > 0) score += 0.5;
+  else score -= 1;
+  if (dy > 12) score += 2;
+  else if (dy > 8) score += 1.5;
+  else if (dy > 5) score += 1;
+  return Math.min(Math.max(parseFloat(score.toFixed(1)), 5.0), 9.9);
 }
 
-Selecione os TOP 5 reais de cada categoria com base em: rentabilidade 12m + momento técnico + fundamentos + R/R. Use dados reais pesquisados agora. Analise com profundidade — o usuário precisa entender POR QUE entrar em cada ativo.`;
+function calcOp(preco, tipo) {
+  const vol    = tipo==="cripto" ? 0.15 : tipo==="fii" ? 0.07 : 0.09;
+  const upside = tipo==="cripto" ? 0.35 : tipo==="fii" ? 0.13 : 0.15;
+  const entMin = (preco*(1-0.015)).toFixed(2);
+  const entMax = (preco*(1+0.015)).toFixed(2);
+  const alvo   = (preco*(1+upside)).toFixed(2);
+  const stop   = (preco*(1-vol)).toFixed(2);
+  return {
+    entMin, entMax, alvo, alvoChg: Math.round(upside*100),
+    stop, stopChg: -Math.round(vol*100), rr:`1:${(upside/vol).toFixed(1)}`
+  };
+}
+
+function gerarAnalise(ticker, nome, change12m, dy, score, tipo) {
+  const trend = change12m>20?"forte tendência de alta":change12m>0?"tendência positiva":"correção recente";
+  const dyText = dy>10?`Dividend Yield atrativo de ${dy}% ao ano.`:dy>5?`DY de ${dy}% acima da média.`:"";
+  const scoreText = score>=9?"Score máximo — oportunidade rara.":score>=8?"Score elevado — alta convicção.":"Bom ponto de entrada.";
+  if (tipo==="acao") return `${nome} apresenta ${trend} com rentabilidade de ${change12m>0?"+":""}${change12m}% em 12 meses. ${dyText} Fundamentos sólidos com geração de caixa consistente. ${scoreText} Entrada próxima ao suporte técnico. Acompanhe resultados trimestrais.`;
+  if (tipo==="fii") return `${nome} distribui rendimentos mensais com ${dyText} Portfólio diversificado reduz risco de vacância. Variação de ${change12m>0?"+":""}${change12m}% em 12 meses. ${scoreText} Ideal para renda mensal isenta de IR.`;
+  return `${nome} acumula ${change12m>0?"+":""}${change12m}% em 12 meses com adoção crescente. Momento técnico favorável com suporte nos níveis atuais. ${scoreText} Alta volatilidade — máximo 5-10% da carteira.`;
+}
+
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin","*");
+  res.setHeader("Cache-Control","s-maxage=86400");
 
   try {
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 6000,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      tool_choice: { type: "auto" },
-      messages: [{ role: "user", content: prompt }]
+    // CÂMBIO
+    const cambioRes  = await fetch("https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL");
+    const cambioJson = await cambioRes.json();
+    const usdVal = parseFloat(cambioJson.USDBRL?.bid||5.80);
+    const eurVal = parseFloat(cambioJson.EURBRL?.bid||6.30);
+    const usdChg = parseFloat(cambioJson.USDBRL?.pctChange||0);
+    const eurChg = parseFloat(cambioJson.EURBRL?.pctChange||0);
+
+    // AÇÕES
+    const acoesRes  = await fetch(`https://brapi.dev/api/quote/${ACOES_TICKERS.join(",")}?token=${BRAPI_TOKEN}&fundamental=true`);
+    const acoesJson = await acoesRes.json();
+    const acoes = (acoesJson.results||[])
+      .filter(a=>a.regularMarketPrice)
+      .map(a=>{
+        const change12m = parseFloat(((a.regularMarketPrice-(a.fiftyTwoWeekLow||a.regularMarketPrice*0.85))/(a.fiftyTwoWeekLow||a.regularMarketPrice*0.85)*100).toFixed(1));
+        const dy    = parseFloat((a.dividendYield||0).toFixed(1));
+        const score = calcScore(change12m, dy);
+        const op    = calcOp(a.regularMarketPrice, "acao");
+        return {
+          rank:0, ticker:a.symbol, nome:a.shortName||a.symbol, setor:a.sector||"B3",
+          preco:a.regularMarketPrice, change12m, dy, score,
+          entrada:`R$${op.entMin}–${op.entMax}`, alvo:`R$${op.alvo}`, alvoChg:op.alvoChg,
+          stop:`R$${op.stop}`, stopChg:op.stopChg, rr:op.rr,
+          segurar:"6–12 meses", risco:Math.abs(change12m)>40?"Médio-Alto":"Médio",
+          analise:gerarAnalise(a.symbol,a.shortName||a.symbol,change12m,dy,score,"acao")
+        };
+      })
+      .sort((a,b)=>b.score-a.score).slice(0,5).map((a,i)=>({...a,rank:i+1}));
+
+    // FIIs
+    const fiisRes  = await fetch(`https://brapi.dev/api/quote/${FIIS_TICKERS.join(",")}?token=${BRAPI_TOKEN}&fundamental=true`);
+    const fiisJson = await fiisRes.json();
+    const fiis = (fiisJson.results||[])
+      .filter(f=>f.regularMarketPrice)
+      .map(f=>{
+        const change12m = parseFloat(((f.regularMarketPrice-(f.fiftyTwoWeekLow||f.regularMarketPrice*0.9))/(f.fiftyTwoWeekLow||f.regularMarketPrice*0.9)*100).toFixed(1));
+        const dy      = parseFloat((f.dividendYield||0).toFixed(1));
+        const dyMensal= parseFloat((dy/12).toFixed(2));
+        const score   = calcScore(change12m, dy);
+        const op      = calcOp(f.regularMarketPrice, "fii");
+        return {
+          rank:0, ticker:f.symbol, nome:f.shortName||f.symbol, setor:"FII",
+          preco:f.regularMarketPrice, change12m, dy, dyMensal, score,
+          entrada:`R$${op.entMin}–${op.entMax}`, alvo:`R$${op.alvo}`, alvoChg:op.alvoChg,
+          stop:`R$${op.stop}`, stopChg:op.stopChg, rr:op.rr,
+          segurar:"Longo prazo", risco:"Baixo",
+          analise:gerarAnalise(f.symbol,f.shortName||f.symbol,change12m,dy,score,"fii")
+        };
+      })
+      .sort((a,b)=>b.score-a.score).slice(0,5).map((a,i)=>({...a,rank:i+1}));
+
+    // CRIPTOS
+    const cryptoRes  = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${CRYPTO_IDS.join(",")}&price_change_percentage=1y&order=market_cap_desc`);
+    const cryptoJson = await cryptoRes.json();
+    const criptos = (cryptoJson||[])
+      .map(c=>{
+        const change12m = parseFloat((c.price_change_percentage_1y_in_currency||0).toFixed(1));
+        const score = calcScore(change12m, 0);
+        const op    = calcOp(c.current_price, "cripto");
+        return {
+          rank:0, ticker:c.symbol?.toUpperCase(), nome:c.name, setor:"Crypto",
+          preco:c.current_price, precoBrl:parseFloat((c.current_price*usdVal).toFixed(2)),
+          change12m, dy:null, score,
+          entrada:`$${op.entMin}–${op.entMax}`, alvo:`$${op.alvo}`, alvoChg:op.alvoChg,
+          stop:`$${op.stop}`, stopChg:op.stopChg, rr:op.rr,
+          segurar:"3–6 meses", risco:"Alto",
+          analise:gerarAnalise(c.symbol?.toUpperCase(),c.name,change12m,0,score,"cripto")
+        };
+      })
+      .sort((a,b)=>b.score-a.score).slice(0,5).map((a,i)=>({...a,rank:i+1}));
+
+    const hora = new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",timeZone:"America/Sao_Paulo"});
+
+    return res.status(200).json({
+      date: new Date().toISOString().slice(0,10),
+      hora, cambio:{usd:{valor:usdVal,chg:usdChg},eur:{valor:eurVal,chg:eurChg}},
+      acoes, fiis, criptos
     });
 
-    const textBlock = response.content.find(b => b.type === "text");
-    if (!textBlock?.text) return res.status(500).json({ error: "Sem resposta da IA" });
-
-    let data;
-    try {
-      const clean = textBlock.text.replace(/```json[\s\S]*?```/g, m => m.slice(7,-3)).replace(/```/g,"").trim();
-      const jsonMatch = clean.match(/\{[\s\S]*\}/);
-      data = JSON.parse(jsonMatch ? jsonMatch[0] : clean);
-    } catch(e) {
-      return res.status(500).json({ error: "JSON inválido", raw: textBlock.text.slice(0,500) });
-    }
-
-    // Detectar mudanças vs ontem
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    try {
-      const prevDoc = await getDoc(doc(db, "cache", "investments_" + yesterday));
-      if (prevDoc.exists()) {
-        const prev = prevDoc.data();
-        const changes = {};
-        for (const cat of ["acoes", "fiis", "criptos"]) {
-          if (!prev[cat] || !data[cat]) continue;
-          const prevTickers = prev[cat].map(a => a.ticker);
-          const currTickers = data[cat].map(a => a.ticker);
-          const saiu = prev[cat].filter(a => !currTickers.includes(a.ticker));
-          const entrou = data[cat].filter(a => !prevTickers.includes(a.ticker));
-          if (saiu.length || entrou.length) changes[cat] = { saiu, entrou };
-        }
-        if (Object.keys(changes).length) data.changes = changes;
-      }
-    } catch(e) {}
-
-    // Salvar no cache
-    try { await setDoc(doc(db, "cache", "investments_" + today), data); } catch(e) {}
-
-    return res.status(200).json(data);
   } catch(e) {
     return res.status(500).json({ error: e.message });
   }
